@@ -268,6 +268,7 @@ int NodeImpl::init_log_storage() {
     if (_options.log_storage) {
         _log_storage = _options.log_storage;
     } else {
+        // TODO uri和具体实现的对应关系
         _log_storage = LogStorage::create(_options.log_uri);
     }
     if (!_log_storage) {
@@ -482,6 +483,7 @@ int NodeImpl::bootstrap(const BootstrapOptions& options) {
     return 0;
 }
 
+// 初始化函数
 int NodeImpl::init(const NodeOptions& options) {
     _options = options;
 
@@ -520,6 +522,7 @@ int NodeImpl::init(const NodeOptions& options) {
         return -1;
     }
 
+    // 这个fsm_caller和fsm的关系是？fsm是用户自己实现的状态机
     // Create _fsm_caller first as log_manager needs it to report error
     _fsm_caller = new FSMCaller();
 
@@ -527,6 +530,7 @@ int NodeImpl::init(const NodeOptions& options) {
     _follower_lease.init(options.election_timeout_ms, options.max_clock_drift_ms);
 
     // log storage and log manager init
+    // 重点看，storage怎么加载的
     if (init_log_storage() != 0) {
         LOG(ERROR) << "node " << _group_id << ":" << _server_id
                    << " init_log_storage failed";
@@ -540,6 +544,7 @@ int NodeImpl::init(const NodeOptions& options) {
     }
 
     // commitment manager init
+    // 这个应该负责管理commit，不知道有没有线程池之类的
     _ballot_box = new BallotBox();
     BallotBoxOptions ballot_box_options;
     ballot_box_options.waiter = _fsm_caller;
@@ -553,12 +558,15 @@ int NodeImpl::init(const NodeOptions& options) {
     // snapshot storage init and load
     // NOTE: snapshot maybe discard entries when snapshot saved but not discard entries.
     //      init log storage before snapshot storage, snapshot storage will update configration
+    // 这部分先跳过
     if (init_snapshot_storage() != 0) {
         LOG(ERROR) << "node " << _group_id << ":" << _server_id
                    << " init_snapshot_storage failed";
         return -1;
     }
 
+    // 和谁检查一致性，看起来是内部的自检查
+    // 这里检查的是snapshot和本地log的一致性
     butil::Status st = _log_manager->check_consistency();
     if (!st.ok()) {
         LOG(ERROR) << "node " << _group_id << ":" << _server_id
@@ -567,15 +575,19 @@ int NodeImpl::init(const NodeOptions& options) {
         return -1;
     }
 
+    // conf => configuration entry 记录peers等配置，应该是适配成员变更的代码
     _conf.id = LogId();
     // if have log using conf in log, else using conf in options
     if (_log_manager->last_log_index() > 0) {
+        // 说明log entry里有成员变更的日志
+        // 因为_config_manager也由log  manager管理
         _log_manager->check_and_set_configuration(&_conf);
     } else {
         _conf.conf = _options.initial_conf;
     }
     
     // init meta and check term
+    // 弄清楚这个meta保存的东西
     if (init_meta_storage() != 0) {
         LOG(ERROR) << "node " << _group_id << ":" << _server_id
                    << " init_meta_storage failed";
@@ -583,11 +595,13 @@ int NodeImpl::init(const NodeOptions& options) {
     }
 
     // first start, we can vote directly
+    // 这是优化
     if (_current_term == 1 && _voted_id.is_empty()) {
         _follower_lease.reset();
     }
 
     // init replicator
+    // 这个重点看看，同步的核心逻辑应该在里面
     ReplicatorGroupOptions rg_options;
     rg_options.heartbeat_timeout_ms = heartbeat_timeout(_options.election_timeout_ms);
     rg_options.election_timeout_ms = _options.election_timeout_ms;
@@ -623,6 +637,7 @@ int NodeImpl::init(const NodeOptions& options) {
     }
 
     // add node to NodeManager
+    // 这里要看 怎么管理
     if (!global_node_manager->add(this)) {
         LOG(ERROR) << "NodeManager add " << _group_id 
                    << ":" << _server_id << " failed";
@@ -636,6 +651,7 @@ int NodeImpl::init(const NodeOptions& options) {
             && _conf.conf.contains(_server_id)) {
         // The group contains only this server which must be the LEADER, trigger
         // the timer immediately.
+        // 从这里切入 看看选举怎么触发
         elect_self(&lck);
     }
 
@@ -1039,6 +1055,11 @@ void NodeImpl::handle_election_timeout() {
     }
 
     // Trigger vote manually, or wait until follower lease expire.
+    // follower判断自己开始竞选的条件组合:
+    // - false && false(既没有人为触发，lease又没有超时)
+    // - true && false 有人为触发，但是lease没有超时。
+    // - true && true 有人为触发，leader也超时
+    // - false && true 没有人为触发，lease超时，一般的流程
     if (!_vote_triggered && !_follower_lease.expired()) {
 
         return;
@@ -1247,6 +1268,7 @@ butil::Status NodeImpl::vote(int election_timeout_ms) {
     if (election_timeout_ms > max_election_timeout_ms) {
         return butil::Status(EINVAL, "election_timeout_ms larger than safety threshold");
     }
+    // 所以这个min有啥意义？
     election_timeout_ms = std::min(election_timeout_ms, max_election_timeout_ms);
     int max_clock_drift_ms = max_election_timeout_ms - election_timeout_ms;
     unsafe_reset_election_timeout_ms(election_timeout_ms, max_clock_drift_ms);
@@ -1441,6 +1463,7 @@ struct OnRequestVoteRPCDone : public google::protobuf::Closure {
     }
 
     void Run() {
+    // 为什么这么写
         do {
             if (cntl.ErrorCode() != 0) {
                 LOG(WARNING) << "node " << node->node_id()
@@ -1512,6 +1535,8 @@ void NodeImpl::handle_pre_vote_response(const PeerId& peer_id, const int64_t ter
     }
 
     // Internal vote should respect lease.
+    // 如果对端因为lease拒绝，而节点又是人为触发的 => true && !tru
+    // => 人为触发的投票无视lease
     if (response.rejected_by_lease() && !_pre_vote_ctx.triggered()) {
         return;
     }
@@ -1533,6 +1558,7 @@ void NodeImpl::handle_pre_vote_response(const PeerId& peer_id, const int64_t ter
     for (std::set<PeerId>::const_iterator it = peers.begin();
             it != peers.end(); ++it) {
         _pre_vote_ctx.grant(*it);
+        // 如果发现以前的leader都给自己投票了，说明什么？说明自己这一轮选举很安全，也别设置倒计时了
         if (*it == _follower_lease.last_leader()) {
             _pre_vote_ctx.grant(_server_id);
             _pre_vote_ctx.stop_grant_self_timer(this);
@@ -1623,6 +1649,7 @@ void NodeImpl::pre_vote(std::unique_lock<raft_mutex_t>* lck, bool triggered) {
             continue;
         }
 
+        // TODO 看起来PreVote没有包含人为触发的选举，如果其他节点没有认可要如何处理
         OnPreVoteRPCDone* done = new OnPreVoteRPCDone(
                 *iter, _current_term, _pre_vote_ctx.version(), this);
         done->cntl.set_timeout_ms(_options.election_timeout_ms);
@@ -1640,6 +1667,7 @@ void NodeImpl::pre_vote(std::unique_lock<raft_mutex_t>* lck, bool triggered) {
 }
 
 // in lock
+// 为啥传锁进来
 void NodeImpl::elect_self(std::unique_lock<raft_mutex_t>* lck, 
                           bool old_leader_stepped_down) {
     LOG(INFO) << "node " << _group_id << ":" << _server_id
@@ -1747,6 +1775,7 @@ void NodeImpl::request_peers_to_vote(const std::set<PeerId>& peers,
         }
 
         RaftService_Stub stub(&channel);
+        // 在这里给每个节点发送投票，然后通过rpc的closure来完成收尾
         stub.request_vote(&done->cntl, &done->request, &done->response, done);
     }
 }
@@ -1900,6 +1929,7 @@ void NodeImpl::become_leader() {
               << " term " << _current_term
               << " become leader of group " << _conf.conf
               << " " << _conf.old_conf;
+    // TODO 看看有没有no-op
     // cancel candidate vote timer
     _vote_timer.stop();
     _vote_ctx.reset(this);
@@ -1980,6 +2010,7 @@ void LeaderStableClosure::Run() {
         LOG(ERROR) << "node " << _node_id << " append [" << _first_log_index << ", "
                    << _first_log_index + _nentries - 1 << "] failed";
     }
+    // 为什么主动析构自己
     delete this;
 }
 
@@ -2025,6 +2056,7 @@ void NodeImpl::apply(LogEntryAndClosure tasks[], size_t size) {
             continue;
         }
         entries.push_back(tasks[i].entry);
+        // TODO 为啥不先写好再push_back？
         entries.back()->id.term = _current_term;
         entries.back()->type = ENTRY_TYPE_DATA;
         _ballot_box->append_pending_task(_conf.conf,
@@ -2657,6 +2689,7 @@ butil::Status NodeImpl::read_committed_user_log(const int64_t index, UserLog* us
         if (entry->type == ENTRY_TYPE_DATA) {
             user_log->set_log_index(cur_index);
             user_log->set_log_data(entry->data);
+            // 需要手动管理引用计数，get_entry有add_ref()
             entry->Release();
             return butil::Status();
         } else {

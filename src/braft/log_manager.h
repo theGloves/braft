@@ -205,6 +205,7 @@ friend class AppendBatcher;
     FSMCaller* _fsm_caller;
 
     raft_mutex_t _mutex;
+    // 这个作用？
     butil::FlatMap<int64_t, WaitMeta*> _wait_map;
     bool _stopped;
     butil::atomic<bool> _has_error;

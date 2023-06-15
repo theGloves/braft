@@ -218,13 +218,6 @@ void Replicator::wait_for_caught_up(ReplicatorId id,
 }
 
 void* Replicator::_on_block_timedout_in_new_thread(void* arg) {
-    Replicator* r = NULL;
-    bthread_id_t id = { (uint64_t)arg };
-    if (bthread_id_lock(id, (void**)&r) != 0) {
-        return NULL;
-    }
-    r->_st.st = IDLE;
-    bthread_id_unlock(id);
     Replicator::_continue_sending(arg, ETIMEDOUT);
     return NULL;
 }
@@ -286,6 +279,7 @@ void Replicator::_on_heartbeat_returned(
     Replicator *r = NULL;
     bthread_id_t dummy_id = { id };
     const long start_time_us = butil::gettimeofday_us();
+    // 如果拿到锁，那么可以得到对应的r。这个r由bthread_create时用户传入
     if (bthread_id_lock(dummy_id, (void**)&r) != 0) {
         return;
     }
@@ -312,13 +306,16 @@ void Replicator::_on_heartbeat_returned(
     }
     r->_consecutive_error_times = 0;
     if (response->term() > r->_options.term) {
+        // 如果收到更大的term，会停止该replicator
         ss << " fail, greater term " << response->term()
            << " expect term " << r->_options.term;
+        // 这个BRAFT_VLOG和一般的log的区别？
         BRAFT_VLOG << ss.str();
 
         NodeImpl *node_impl = r->_options.node;
         // Acquire a reference of Node here in case that Node is detroyed
         // after _notify_on_caught_up.
+        // 这个用法挺巧妙的
         node_impl->AddRef();
         r->_notify_on_caught_up(EPERM, true);
         LOG(INFO) << "Replicator=" << dummy_id << " is going to quit"
@@ -335,6 +332,7 @@ void Replicator::_on_heartbeat_returned(
     bool readonly = response->has_readonly() && response->readonly();
     BRAFT_VLOG << ss.str() << " readonly " << readonly;
     r->_update_last_rpc_send_timestamp(rpc_send_time);
+    // 重新注册信号
     r->_start_heartbeat_timer(start_time_us);
     NodeImpl* node_impl = NULL;
     // Check if readonly config changed
@@ -347,6 +345,7 @@ void Replicator::_on_heartbeat_returned(
         CHECK_EQ(0, bthread_id_unlock(dummy_id)) << "Fail to unlock " << dummy_id;
         return;
     }
+    // 下面的逻辑在处理readonly，这个参数用来干什么？
     const PeerId peer_id = r->_options.peer_id;
     int64_t term = r->_options.term;
     CHECK_EQ(0, bthread_id_unlock(dummy_id)) << "Fail to unlock " << dummy_id;
@@ -375,17 +374,20 @@ void Replicator::_on_rpc_returned(ReplicatorId id, brpc::Controller* cntl,
        << r->_options.peer_id << " prev_log_index " << request->prev_log_index()
        << " prev_log_term " << request->prev_log_term() << " count " << request->entries_size();
 
+    // TODO 这里面的逻辑
     bool valid_rpc = false;
     int64_t rpc_first_index = request->prev_log_index() + 1;
     int64_t min_flying_index = r->_min_flying_index();
     CHECK_GT(min_flying_index, 0);
 
+    // 这个循环在找什么
     for (std::deque<FlyingAppendEntriesRpc>::iterator rpc_it = r->_append_entries_in_fly.begin();
         rpc_it != r->_append_entries_in_fly.end(); ++rpc_it) {
         if (rpc_it->log_index > rpc_first_index) {
             break;
         }
         if (rpc_it->call_id == cntl->call_id()) {
+            // 这个call_id的特点？如果发生过replicator重新创建，这个call_id应该不同才是
             valid_rpc = true;
         }
     }
@@ -396,6 +398,7 @@ void Replicator::_on_rpc_returned(ReplicatorId id, brpc::Controller* cntl,
         return;
     }
 
+    // TODO 补一下使用brpc的规范
     if (cntl->Failed()) {
         ss << " fail, sleep.";
         BRAFT_VLOG << ss.str();
@@ -516,6 +519,7 @@ void Replicator::_on_rpc_returned(ReplicatorId id, brpc::Controller* cntl,
     r->_has_succeeded = true;
     r->_notify_on_caught_up(0, false);
     // dummy_id is unlock in _send_entries
+    // 这个timeout_now_index是在leader_transfer时被赋值，看起来是一个优化
     if (r->_timeout_now_index > 0 && r->_timeout_now_index < r->_min_flying_index()) {
         r->_send_timeout_now(false, false);
     }
@@ -552,6 +556,7 @@ int Replicator::_fill_common_fields(AppendEntriesRequest* request,
     return 0;
 }
 
+// _send_empty_entries(false)和no-op的关系
 void Replicator::_send_empty_entries(bool is_heartbeat) {
     std::unique_ptr<brpc::Controller> cntl(new brpc::Controller);
     std::unique_ptr<AppendEntriesRequest> request(new AppendEntriesRequest);
@@ -562,6 +567,7 @@ void Replicator::_send_empty_entries(bool is_heartbeat) {
         // _id is unlock in _install_snapshot
         return _install_snapshot();
     }
+    // 心跳消息和普通append entries的异同
     if (is_heartbeat) {
         _heartbeat_in_fly = cntl->call_id();
         _heartbeat_counter++;
@@ -591,6 +597,7 @@ void Replicator::_send_empty_entries(bool is_heartbeat) {
     RaftService_Stub stub(&_sending_channel);
     stub.append_entries(cntl.release(), request.release(), 
                         response.release(), done);
+    // 这个unlock 是想保证只有一个线程进来吗
     CHECK_EQ(0, bthread_id_unlock(_id)) << "Fail to unlock " << _id;
 }
 
@@ -658,6 +665,8 @@ void Replicator::_send_entries() {
     int prepare_entry_rc = 0;
     CHECK_GT(max_entries_size, 0);
     for (int i = 0; i < max_entries_size; ++i) {
+        // 取em指针干嘛？重复利用？
+        // 看作一般的tmp变量就行，避免拷贝的搞法
         prepare_entry_rc = _prepare_entry(i, &em, &cntl->request_attachment());
         if (prepare_entry_rc != 0) {
             break;
@@ -750,6 +759,7 @@ int Replicator::_continue_sending(void* arg, int error_code) {
 }
 
 void Replicator::_wait_more_entries() {
+    // TODO 这个条件的含义
     if (_wait_id == 0 && FLAGS_raft_max_entries_size > _flying_append_entries_size &&
         (size_t)FLAGS_raft_max_parallel_append_entries_rpc_num > _append_entries_in_fly.size()) {
         _wait_id = _options.log_manager->wait(
@@ -983,7 +993,9 @@ void* Replicator::_send_heartbeat(void* arg) {
 
 int Replicator::_on_error(bthread_id_t id, void* arg, int error_code) {
     Replicator* r = (Replicator*)arg;
+    // 如果有多次bthread_id_error被调用，会有什么现象
     if (error_code == ESTOP) {
+        // leader主动停follower
         brpc::StartCancel(r->_install_snapshot_in_fly);
         brpc::StartCancel(r->_heartbeat_in_fly);
         brpc::StartCancel(r->_timeout_now_in_fly);
@@ -997,11 +1009,14 @@ int Replicator::_on_error(bthread_id_t id, void* arg, int error_code) {
         r->_destroy();
         return 0;
     } else if (error_code == ETIMEDOUT) {
+        // 通过_on_timedout调用    bthread_id_error(id, ETIMEDOUT);来间接触发
         // This error is issued in the TimerThread, start a new bthread to avoid
         // blocking the caller.
         // Unlock id to remove the context-switch out of the critical section
+        // 为啥一定要bthread_id_unlock
         CHECK_EQ(0, bthread_id_unlock(id)) << "Fail to unlock" << id;
         bthread_t tid;
+        // 为什么要用更紧急的模式来创建bthread，和普通的bthread有啥区别
         if (bthread_start_urgent(&tid, NULL, _send_heartbeat,
                                  reinterpret_cast<void*>(id.value)) != 0) {
             PLOG(ERROR) << "Fail to start bthread";

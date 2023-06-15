@@ -366,6 +366,7 @@ int Segment::load(ConfigurationManager* configuration_manager) {
     return ret;
 }
 
+// 这个append会触发写磁盘吗，看起来没有出发sync
 int Segment::append(const LogEntry* entry) {
 
     if (BAIDU_UNLIKELY(!entry || !_is_open)) {
@@ -692,7 +693,9 @@ int SegmentLogStorage::init(ConfigurationManager* configuration_manager) {
 
     int ret = 0;
     bool is_empty = false;
+    // 为啥这么写啊
     do {
+        //  TODO 加载meta 看下怎么meta存的内容 
         ret = load_meta();
         if (ret != 0 && errno == ENOENT) {
             LOG(WARNING) << _path << " is empty";
@@ -724,6 +727,7 @@ int64_t SegmentLogStorage::last_log_index() {
     return _last_log_index.load(butil::memory_order_acquire);
 }
 
+// TODO 如果一个segment写满了咋整
 int SegmentLogStorage::append_entries(const std::vector<LogEntry*>& entries, IOMetric* metric) {
     if (entries.empty()) {
         return 0;
@@ -773,6 +777,7 @@ int SegmentLogStorage::append_entries(const std::vector<LogEntry*>& entries, IOM
 }
 
 int SegmentLogStorage::append_entry(const LogEntry* entry) {
+    // 如果上一个segment满了，这里会触发roll
     scoped_refptr<Segment> segment = open_segment();
     if (NULL == segment) {
         return EIO;
@@ -991,6 +996,7 @@ int SegmentLogStorage::list_segments(bool is_empty) {
 
     // restore segment meta
     while (dir_reader.Next()) {
+        // 看怎么加载segment
         // unlink unneed segments and unfinished unlinked segments
         if ((is_empty && 0 == strncmp(dir_reader.name(), "log_", strlen("log_"))) ||
             (0 == strncmp(dir_reader.name() + (strlen(dir_reader.name()) - strlen(".tmp")),

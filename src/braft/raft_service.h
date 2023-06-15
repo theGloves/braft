@@ -21,8 +21,11 @@
 
 namespace braft {
 
+// 这个类声明Raft内部的接口
+// 一个Raft实现的真正逻辑在NodeImpl类，通过NodeManager来获取对应的raft
 class RaftServiceImpl : public RaftService {
 public:
+    // explicit这个关键词是？让构造方法要被显式地调用
     explicit RaftServiceImpl(butil::EndPoint addr)
         : _addr(addr) {}
     ~RaftServiceImpl();

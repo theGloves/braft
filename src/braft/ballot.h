@@ -41,6 +41,8 @@ public:
     int init(const Configuration& conf, const Configuration* old_conf);
     PosHint grant(const PeerId& peer, PosHint hint);
     void grant(const PeerId& peer);
+
+    // 一个行为被承认 => 在新旧peer上都超过quorum
     bool granted() const { return _quorum <= 0 && _old_quorum <= 0; }
 private:
     struct UnfoundPeerId {

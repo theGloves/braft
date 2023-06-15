@@ -331,6 +331,8 @@ void LogManager::unsafe_truncate_suffix(const int64_t last_index_kept) {
     CHECK_EQ(0, bthread::execution_queue_execute(_disk_queue, tsc));
 }
 
+// TODO 这个函数会给entry设置合适的offset
+// 如果已经有offset，会检查
 int LogManager::check_and_resolve_conflict(
             std::vector<LogEntry*> *entries, StableClosure* done) {
     AsyncClosureGuard done_guard(done);   
@@ -428,6 +430,8 @@ void LogManager::append_entries(
 
     for (size_t i = 0; i < entries->size(); ++i) {
         // Add ref for disk_thread
+        // TODO 为啥不到disk thread开始工作时候再加引用
+        // 智能指针能不能满足这个需求
         (*entries)[i]->AddRef();
         if ((*entries)[i]->type == ENTRY_TYPE_CONFIGURATION) {
             ConfigurationEntry conf_entry(*((*entries)[i]));
@@ -510,6 +514,7 @@ public:
                             EIO, "Corrupted LogStorage");
                 }
                 _storage[i]->update_metric(&metric);
+                // 这个run会执行LeaderStableClosure，去触发一个ballot的commitAt
                 _storage[i]->Run();
             }
             _to_append.clear();
@@ -610,6 +615,8 @@ int LogManager::disk_thread(void* meta,
             if (ret != 0) {
                 log_manager->report_error(ret, "Failed operation on LogStorage");
             }
+            // TODO LeaderStableClosure到底会被谁调用
+            //  看起来在ab.flush成功时也会调用done->Run()
             done->Run();
         }
     }
@@ -771,6 +778,7 @@ LogEntry* LogManager::get_entry(const int64_t index) {
     }
     lck.unlock();
     g_read_entry_from_storage << 1;
+    // 去磁盘里找
     entry = _log_storage->get_entry(index);
     if (!entry) {
         report_error(EIO, "Corrupted entry at index=%" PRId64, index);
@@ -945,6 +953,7 @@ void LogManager::report_error(int error_code, const char* fmt, ...) {
 }
 
 butil::Status LogManager::check_consistency() {
+    // TODO 合法的term & index
     BAIDU_SCOPED_LOCK(_mutex);
     CHECK_GT(_first_log_index, 0);
     CHECK_GE(_last_log_index, 0);

@@ -74,6 +74,8 @@ void RepeatedTimerTask::on_timedout() {
         }
         return;
     }
+    // TODO 我的疑问，unique在被析构时会释放锁吗？按理说智能指针是释放资源，
+    //  那会不会把整个mutex都析构后续就无法使用
     return schedule(lck);
 }
 
@@ -113,6 +115,9 @@ void* RepeatedTimerTask::run_on_timedout_in_new_thread(void* arg) {
 }
 
 void RepeatedTimerTask::on_timedout(void* arg) {
+    // 这里启动一个新的线程去执行on_timeout函数
+    // 注释里说不会将timer线程阻塞，如果阻塞会有什么后果？猜测：会影响timer线程的回收让整个Timer类回收变慢，
+    // 进而影响节点的退出
     // Start a bthread to invoke run() so we won't block the timer thread.
     // as run() might access the disk so the time it takes is probably beyond
     // expection
@@ -124,6 +129,10 @@ void RepeatedTimerTask::on_timedout(void* arg) {
     }
 }
 
+// 都是在同一个class内，为什么传锁进来？
+// 如果不传，可能会发生：reset和内部on_timedout同时调用schedule。那会有什么危险呢
+// 从语义上，schedule是单独抽象出来服用的，应该包含在调用者的临界区中
+// 不通过入参传入&锁不支持可重入的话，要求调用者先释放锁再调用schedule，可能有问题
 void RepeatedTimerTask::schedule(std::unique_lock<raft_mutex_t>& lck) {
     _next_duetime =
             butil::milliseconds_from_now(adjust_timeout_ms(_timeout_ms));
@@ -132,6 +141,19 @@ void RepeatedTimerTask::schedule(std::unique_lock<raft_mutex_t>& lck) {
         LOG(ERROR) << "Fail to add timer";
         return on_timedout(this);
     }
+}
+
+void RepeatedTimerTask::schedule(){
+    std::unique_lock<raft_mutex_t> lck(_mutex);
+    lck.lock();
+    _next_duetime =
+            butil::milliseconds_from_now(adjust_timeout_ms(_timeout_ms));
+    if (bthread_timer_add(&_timer, _next_duetime, on_timedout, this) != 0) {
+        lck.unlock();
+        LOG(ERROR) << "Fail to add timer";
+        return on_timedout(this);
+    }
+    lck.unlock();
 }
 
 void RepeatedTimerTask::reset() {

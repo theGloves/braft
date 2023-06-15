@@ -15,6 +15,8 @@
 // Authors: Wang,Yao(wangyao02@baidu.com)
 //          Zhangyi Chen(chenzhangyi01@baidu.com)
 
+// storage并不只是用户的log
+// 还有raft的meta、snapshot等
 #ifndef BRAFT_RAFT_STORAGE_H
 #define BRAFT_RAFT_STORAGE_H
 
@@ -121,6 +123,8 @@ inline int gc_dir(const std::string& path) {
     return 0; 
 }
 
+// 在nodeImpl的init_log_storage初始化
+// TODO 找这个的具体实现 memory_log SegmentLogStorage
 class LogStorage {
 public:
     virtual ~LogStorage() {}
@@ -159,6 +163,7 @@ public:
     // Create an instance of this kind of LogStorage with the parameters encoded 
     // in |uri|
     // Return the address referenced to the instance on success, NULL otherwise.
+    // TODO 这个uri格式怎么定义？
     virtual LogStorage* new_instance(const std::string& uri) const = 0;
 
     static LogStorage* create(const std::string& uri);

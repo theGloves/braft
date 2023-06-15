@@ -128,6 +128,7 @@ int BallotBox::append_pending_task(const Configuration& conf, const Configuratio
 
     BAIDU_SCOPED_LOCK(_mutex);
     CHECK(_pending_index > 0);
+    // 这种写法又是为何
     _pending_meta_queue.push_back(Ballot());
     _pending_meta_queue.back().swap(bl);
     _closure_queue->append_pending_closure(closure);

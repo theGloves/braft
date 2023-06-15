@@ -46,6 +46,8 @@ class SnapshotExecutor;
 class StopTransferArg;
 
 class NodeImpl;
+// 定时任务的基类
+// TODO 当一个函数带有virtual 一定要求所有子类要override它吗？
 class NodeTimer : public RepeatedTimerTask {
 public:
     NodeTimer() : _node(NULL) {}
@@ -231,12 +233,17 @@ public:
     //  - This node is to step down immediately if it was the leader.
     //  - Any futuer operation except shutdown would fail, including any RPC
     //    request.
+    // 当节点进入STATE_ERROR，还能退回 正常状态吗
     void on_error(const Error& e);
 
     int transfer_leadership_to(const PeerId& peer);
     
     butil::Status read_committed_user_log(const int64_t index, UserLog* user_log);
 
+    // bootstrap和init的区别？
+    // 更轻量？不用初始化node manager
+    // bootstrap allows user to construct a raft Node with initialized state
+    // 这个state包括哪些
     int bootstrap(const BootstrapOptions& options);
 
     bool disable_cli() const { return _options.disable_cli; }
@@ -328,6 +335,7 @@ friend class butil::RefCountedThreadSafe<NodeImpl>;
 
 private:
 
+// 从这里入手
     class ConfigurationCtx {
     DISALLOW_COPY_AND_ASSIGN(ConfigurationCtx);
     public:
@@ -488,42 +496,56 @@ private:
         int64_t vote_ctx_version;
         VoteBallotCtx* vote_ctx;
     };
+    // 有一个基本认识，所有的ctx，都是记录某些操作的上下文（间接说明操作有可能跨时间、函数）
 
     State _state;
     int64_t _current_term;
     PeerId _leader_id;
     PeerId _voted_id;
+    // 两个voteBallot的生命周期和node一样，通过reset和init反复使用
     VoteBallotCtx _vote_ctx; // candidate vote ctx
     VoteBallotCtx _pre_vote_ctx; // prevote ctx
+    // 配置信息 可能在某一个时刻存在new和old
     ConfigurationEntry _conf;
 
     GroupId _group_id;
     VersionedGroupId _v_group_id;
     PeerId _server_id;
+    // 配置信息
     NodeOptions _options;
 
     raft_mutex_t _mutex;
     ConfigurationCtx _conf_ctx;
+    // 存储有日志数据和元数据，都用指针可以这么想，一个service可以有多个raft group，他们可以共享
     LogStorage* _log_storage;
     RaftMetaStorage* _meta_storage;
-    ClosureQueue* _closure_queue;
-    ConfigurationManager* _config_manager;
+    ClosureQueue* _closure_queue; // TODO
+    ConfigurationManager* _config_manager; // TODO 这个具体用途？
     LogManager* _log_manager;
-    FSMCaller* _fsm_caller;
-    BallotBox* _ballot_box;
-    SnapshotExecutor* _snapshot_executor;
+    FSMCaller* _fsm_caller; // 用户逻辑的状态机执行器
+    BallotBox* _ballot_box; // 记录所有日志的同步情况，leader根据这个来判读日志是否可以提交
+    SnapshotExecutor* _snapshot_executor; // 跳过
     ReplicatorGroup _replicator_group;
-    std::vector<Closure*> _shutdown_continuations;
-    ElectionTimer _election_timer;
-    VoteTimer _vote_timer;
-    StepdownTimer _stepdown_timer;
-    SnapshotTimer _snapshot_timer;
-    bthread_timer_t _transfer_timer;
+    std::vector<Closure*> _shutdown_continuations; // TODO
+
+    // 各种倒计时。回答：[什么时候设置|什么时候取消|超时会触发什么]
+    ElectionTimer _election_timer; // [节点启动；管理员变更超时时间；管理员指定节点当选leader；节点退回follower|开始选举；节点关闭|handle_election_timeout触发preVote]
+    VoteTimer _vote_timer; // [节点启动；开始选举|节点当选leader；节点关闭；从candidate退回follower|handle_vote_timeout]
+    StepdownTimer _stepdown_timer;// [节点启动；节点当选leader|节点从leader/transferring退回follower；节点关闭|handle_stepdown_timeout：判断是大多数节点dead还是自己失去leader]
+    SnapshotTimer _snapshot_timer;// [||]
+    bthread_timer_t _transfer_timer;// [leader开始转让leader|节点退回follower|on_transfer_timeout，变回leader]
+
     StopTransferArg* _stop_transfer_arg;
-    bool _vote_triggered;
-    ReplicatorId _waking_candidate;
-    bthread::ExecutionQueueId<LogEntryAndClosure> _apply_queue_id;
-    bthread::ExecutionQueue<LogEntryAndClosure>::scoped_ptr_t _apply_queue;
+    bool _vote_triggered; // 人为设置选主
+    ReplicatorId _waking_candidate; // TODO
+
+    // 线程池
+    bthread::ExecutionQueueId<LogEntryAndClosure> _apply_queue_id; // 线程池对应id
+    // 用户日志被提交到_apply_queue
+    bthread::ExecutionQueue<LogEntryAndClosure>::scoped_ptr_t _apply_queue; // 绑定的execute_applying_tasks
+
+    // TODO cache 啥时候用：消息乱序时使用。为什么造成这个现象
+    // 什么时候取出来呢？
     AppendEntriesCache* _append_entries_cache;
     int64_t _append_entries_cache_version;
 
@@ -531,6 +553,7 @@ private:
     bool _node_readonly;
     bool _majority_nodes_readonly;
 
+    // TODO 这个lease 好好看一下
     LeaderLease _leader_lease;
     FollowerLease _follower_lease;
 };

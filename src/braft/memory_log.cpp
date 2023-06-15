@@ -29,6 +29,8 @@ int MemoryLogStorage::init(ConfigurationManager* configuration_manager) {
 
 LogEntry* MemoryLogStorage::get_entry(const int64_t index) {
     std::unique_lock<raft_mutex_t> lck(_mutex);
+    // 这个加锁会影响性能吗？
+    // TODO 这是啥……
     if (index < _first_log_index.load(butil::memory_order_relaxed)
             || index > _last_log_index.load(butil::memory_order_relaxed)) {
         return NULL;
@@ -64,6 +66,7 @@ int MemoryLogStorage::append_entry(const LogEntry* input_entry) {
                   << " _first_log_index=" << _first_log_index;
         return ERANGE;
     }
+    // TODO 看起来自己维护了一个引用，是想解决啥问题
     input_entry->AddRef();
     _log_entry_data.push_back(const_cast<LogEntry*>(input_entry));
     _last_log_index.fetch_add(1, butil::memory_order_relaxed);
@@ -102,6 +105,7 @@ int MemoryLogStorage::truncate_prefix(const int64_t first_index_kept) {
     }
     lck.unlock();
 
+    // 先把要删的数据保存下来，然后在release
     for (size_t i = 0; i < popped.size(); ++i) {
         popped[i]->Release();
     }
@@ -134,6 +138,7 @@ int MemoryLogStorage::truncate_suffix(const int64_t last_index_kept) {
 }
 
 int MemoryLogStorage::reset(const int64_t next_log_index) {
+    // 为啥不复用truncate_suffix，reset是将所有log清空，没必要在循环&比较index了
     if (next_log_index <= 0) {
         LOG(ERROR) << "Invalid next_log_index=" << next_log_index;
         return EINVAL;

@@ -235,7 +235,8 @@ private:
         FlyingAppendEntriesRpc(int64_t index, int size, brpc::CallId id)
             : log_index(index), entries_size(size), call_id(id) {}
     };
-    
+
+    //重要！
     brpc::Channel _sending_channel;
     int64_t _next_index;
     int64_t _flying_append_entries_size;
@@ -254,7 +255,7 @@ private:
     LogManager::WaitId _wait_id;
     bool _is_waiter_canceled;
     bthread_id_t _id;
-    ReplicatorOptions _options;
+    ReplicatorOptions _options;// 包括哪些信息，和节点自己的信息怎么同步
     bthread_timer_t _heartbeat_timer;
     SnapshotReader* _reader;
     CatchupClosure *_catchup_closure;

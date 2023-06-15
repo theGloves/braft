@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 // Authors: Zhangyi Chen(chenzhangyi01@baidu.com)
 
 #include "braft/ballot.h"
@@ -45,6 +44,8 @@ int Ballot::init(const Configuration& conf, const Configuration* old_conf) {
     return 0;
 }
 
+// peer透出赞成票
+// PosHint的使用，看起来是一个优化，如果begin + hint.Pos上是对应的peer就直接返回
 Ballot::PosHint Ballot::grant(const PeerId& peer, PosHint hint) {
     std::vector<UnfoundPeerId>::iterator iter;
     iter = find_peer(peer, _peers, hint.pos0);

@@ -97,6 +97,7 @@ private:
     raft_mutex_t                                    _mutex;
     butil::atomic<int64_t>                          _last_committed_index;
     int64_t                                         _pending_index;
+    // _pending_meta_queue和log entries的对应关系
     std::deque<Ballot>                              _pending_meta_queue;
 
 };

@@ -50,6 +50,8 @@ const PeerId ANY_PEER(butil::EndPoint(butil::IP_ANY, 0), 0);
 
 // Raft-specific closure which encloses a butil::Status to report if the
 // operation was successful.
+// 理解为回调函数
+// 和 golang里面的defer，利用RAII的特性保证在函数
 class Closure : public google::protobuf::Closure {
 public:
     butil::Status& status() { return _st; }
@@ -112,6 +114,7 @@ struct Task {
     butil::IOBuf* data;
 
     // Continuation when the data is applied to StateMachine or error occurs.
+    // another name: callback
     Closure* done;
 
     // Reject this task if expected_term doesn't match the current term of
@@ -440,6 +443,7 @@ struct NodeStatus {
 // time:        ----------|-----------|-----------------|---|-------
 // lease state:   EXPIRED | NOT_READY |      VALID      |  EXPIRED  
 // 
+// 更新逻辑，比如有任意一个follower没收到心跳，怎么更新？
 enum LeaseState {
     // Lease is disabled, this state will only be returned when
     // |raft_enable_leader_lease == false|.
@@ -612,11 +616,13 @@ inline NodeOptions::NodeOptions()
     , disable_cli(false)
 {}
 
+// 为啥单独弄这个的get。有分支判断
 inline int NodeOptions::get_catchup_timeout_ms() {
     return (catchup_timeout_ms == 0) ? election_timeout_ms : catchup_timeout_ms;
 }
 
 class NodeImpl;
+// 核心对外接口，真正实现在NodeImpl
 class Node {
 public:
     Node(const GroupId& group_id, const PeerId& peer_id);
@@ -641,6 +647,7 @@ public:
     bool is_leader_lease_valid();
 
     // Get leader lease status for more complex checking
+    // 有多complex？出于何种目的弄这个。应该是返回更多的信息
     void get_leader_lease_status(LeaderLeaseStatus* status);
 
     // init node
@@ -665,6 +672,7 @@ public:
     //              will pass the ownership to StateMachine::on_apply.
     //              Otherwise we will specify the error and call it.
     //
+    // 对外用户的入口，相当于kafka的produce请求入口
     void apply(const Task& task);
 
     // list peers of this raft group, only leader retruns ok
@@ -701,11 +709,14 @@ public:
     // user trigger vote
     // reset election_timeout, suggest some peer to become the leader in a
     // higher probability
+    // 管理员手动切主/指定某个节点当选leader
+    // 原理：给某个follower指定一个election_timeout，让其timer超时开始竞选流程
     butil::Status vote(int election_timeout);
 
     // Reset the |election_timeout_ms| for the very node, the |max_clock_drift_ms|
     // is also adjusted to keep the sum of |election_timeout_ms| and |the max_clock_drift_ms|
     // unchanged.
+    // 什么时候会设置这个时间，包括下面的接口也是
     butil::Status reset_election_timeout_ms(int election_timeout_ms);
 
     // Forcely reset |election_timeout_ms| and |max_clock_drift_ms|. It may break
@@ -731,6 +742,7 @@ public:
     // If peer is ANY_PEER, a proper follower will be chosen as the leader for
     // the next term.
     // Returns 0 on success, -1 otherwise.
+    // 主动把leader转移给指定节点，一般是节点下线时会调用，是一个优化（超时选举兜底—）
     int transfer_leadership_to(const PeerId& peer);
 
     // Read the first committed user log from the given index.
@@ -833,7 +845,7 @@ int add_service(brpc::Server* server, const butil::EndPoint& listen_addr);
 int add_service(brpc::Server* server, int port);
 int add_service(brpc::Server* server, const char* listen_ip_and_port);
 
-// GC
+// GC 这个GC指的是？
 struct GCOptions {
     // Versioned-groupid of this raft instance. 
     // Version is necessary because instance with the same groupid may be created 

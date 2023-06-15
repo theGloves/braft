@@ -28,6 +28,8 @@
 
 namespace braft {
 
+// 这里指定内存对齐的大小为BAIDU_CACHELINE_ALIGNMENT，这个是解决false sharing的问题
+// http://brpc.incubator.apache.org/zh/docs/rpc-in-depth/atomic-instructions/
 class BAIDU_CACHELINE_ALIGNMENT MemoryLogStorage : public LogStorage {
 public:
     typedef std::deque<LogEntry*> MemoryData;

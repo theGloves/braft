@@ -40,6 +40,7 @@ struct ConfigurationEntry {
     bool empty() const { return conf.empty(); }
     void list_peers(std::set<PeerId>* peers) {
         peers->clear();
+        // 。。。这个写法 只能说很奇怪
         conf.append_peers(peers);
         old_conf.append_peers(peers);
     }

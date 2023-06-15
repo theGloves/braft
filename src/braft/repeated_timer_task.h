@@ -71,7 +71,7 @@ private:
     static void* run_on_timedout_in_new_thread(void* arg);
     void on_timedout();
     void schedule(std::unique_lock<raft_mutex_t>& lck);
-
+    void schedule();
     raft_mutex_t _mutex;
     bthread_timer_t _timer;
     timespec _next_duetime;

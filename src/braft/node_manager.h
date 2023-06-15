@@ -76,6 +76,7 @@ private:
     static size_t _add_node(Maps&, const NodeImpl* node);
     static size_t _remove_node(Maps&, const NodeImpl* node);
 
+    // lock-free的性能优化，双buffer
     butil::DoublyBufferedData<Maps> _nodes;
 
     raft_mutex_t _mutex;
